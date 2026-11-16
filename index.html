@@ -3226,5 +3226,130 @@
 
     initialize();
   </script>
+  
+  <style>
+  /* Keep controls below the iPhone status bar. */
+  @media (max-width: 650px) {
+    main > header {
+      padding-top:
+        calc(18px + env(safe-area-inset-top, 0px)) !important;
+    }
+
+    body[data-view="feed"] .tabs {
+      top: calc(58px + env(safe-area-inset-top, 0px));
+    }
+
+    body[data-view="feed"] #release-note {
+      top: calc(98px + env(safe-area-inset-top, 0px));
+    }
+
+    #filters {
+      padding-top:
+        calc(26px + env(safe-area-inset-top, 0px));
+    }
+
+    dialog {
+      max-height: calc(
+        100dvh
+        - env(safe-area-inset-top, 0px)
+        - env(safe-area-inset-bottom, 0px)
+        - 24px
+      );
+    }
+  }
+</style>
+
+<script>
+(() => {
+  if (window.framePositionFixInstalled) return;
+  window.framePositionFixInstalled = true;
+
+  const positions = new Map();
+  let renderedMode = mode;
+  let discardOldPosition = false;
+  const originalRender = render;
+
+  /* These actions intentionally start a fresh feed. */
+  document.addEventListener("click", event => {
+    if (event.target.closest(
+      "#restart-button, #apply-filters, " +
+      "#reset-filters, #empty-action"
+    )) {
+      positions.clear();
+      discardOldPosition = true;
+    }
+  }, true);
+
+  render = function (...args) {
+    const feed = document.getElementById("feed");
+
+    /* Remember the movie before the existing renderer clears it. */
+    if (
+      !discardOldPosition &&
+      document.body.dataset.view === "feed" &&
+      !feed.hidden
+    ) {
+      const cards = [...feed.querySelectorAll(".movie")];
+      let current = null;
+      let nearest = Infinity;
+
+      for (const card of cards) {
+        const distance = Math.abs(
+          card.offsetTop - feed.scrollTop
+        );
+
+        if (distance < nearest) {
+          nearest = distance;
+          current = card;
+        }
+      }
+
+      if (current) {
+        positions.set(renderedMode, current.dataset.id);
+      }
+    }
+
+    discardOldPosition = false;
+
+    originalRender.apply(this, args);
+    renderedMode = mode;
+
+    if (document.body.dataset.view !== "feed") return;
+
+    const savedID = positions.get(mode);
+    if (savedID == null) return;
+
+    const index = filteredMovies.findIndex(
+      movie => String(movie.id) === savedID
+    );
+
+    if (index < 0) return;
+
+    /* Load enough cards to restore movies far down the feed. */
+    let count = feed.querySelectorAll(".movie").length;
+
+    while (count <= index) {
+      appendBatch();
+
+      const nextCount =
+        feed.querySelectorAll(".movie").length;
+
+      if (nextCount <= count) break;
+      count = nextCount;
+    }
+
+    const target = feed.querySelectorAll(".movie")[index];
+    if (!target) return;
+
+    /* Restore immediately, without scrolling past earlier movies. */
+    const previousBehavior = feed.style.scrollBehavior;
+
+    feed.style.scrollBehavior = "auto";
+    feed.scrollTop = target.offsetTop;
+    feed.style.scrollBehavior = previousBehavior;
+  };
+})();
+</script>
+  
 </body>
 </html>
