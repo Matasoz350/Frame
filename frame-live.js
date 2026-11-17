@@ -1109,5 +1109,240 @@
 
   // If the original catalog is still loading, its initialization will
   // call this renderer when ready. Otherwise start immediately.
+    /*
+   * Keep the feed position during phone rotation.
+   * Layout changes must not be treated as movie scrolling.
+   */
+  let phoneTurning = false;
+  let portraitPosition = null;
+  let rotationTimer = null;
+  let rotationVersion = 0;
+
+  function isPhoneDevice() {
+    return (
+      matchMedia("(pointer:coarse)").matches &&
+      Math.min(screen.width, screen.height) < 600
+    );
+  }
+
+  function phoneIsLandscape() {
+    if (screen.orientation?.type) {
+      return screen.orientation.type.startsWith("landscape");
+    }
+
+    if (typeof window.orientation === "number") {
+      return Math.abs(window.orientation) === 90;
+    }
+
+    return matchMedia("(orientation: landscape)").matches;
+  }
+
+  const rememberBeforeRotationFix = rememberPosition;
+
+  rememberPosition = function () {
+    if (phoneTurning) return;
+    if (isPhoneDevice() && phoneIsLandscape()) return;
+
+    rememberBeforeRotationFix();
+
+    if (
+      displayedView === "feed" &&
+      displayedState &&
+      displayedState.anchor != null
+    ) {
+      portraitPosition = {
+        state: displayedState,
+        id: displayedState.anchor
+      };
+    }
+  };
+
+  const seenBeforeRotationFix = scheduleSeen;
+
+  scheduleSeen = function () {
+    if (
+      phoneTurning ||
+      (isPhoneDevice() && phoneIsLandscape())
+    ) {
+      clearTimeout(seenTimer);
+      return;
+    }
+
+    seenBeforeRotationFix();
+  };
+
+  // Replace the existing scroll listeners with guarded listeners.
+  const scrollBeforeRotationFix = onScroll;
+
+  feed.removeEventListener("scroll", onScroll);
+  grid.removeEventListener("scroll", onScroll);
+
+  onScroll = function () {
+    if (
+      phoneTurning ||
+      (isPhoneDevice() && phoneIsLandscape())
+    ) {
+      return;
+    }
+
+    scrollBeforeRotationFix();
+  };
+
+  feed.addEventListener("scroll", onScroll, { passive: true });
+  grid.addEventListener("scroll", onScroll, { passive: true });
+
+  function handlePhoneRotation() {
+    if (!isPhoneDevice()) return;
+
+    const landscape = phoneIsLandscape();
+
+    // Normal portrait resizing, such as Safari's toolbar, is ignored.
+    if (!landscape && !phoneTurning) return;
+
+    clearTimeout(rotationTimer);
+    clearTimeout(seenTimer);
+    const version = ++rotationVersion;
+
+    if (!phoneTurning) {
+      phoneTurning = true;
+
+      if (
+        activeState &&
+        view === "feed" &&
+        portraitPosition?.state !== activeState
+      ) {
+        portraitPosition = {
+          state: activeState,
+          id: activeState.anchor ?? activeState.items[0]?.id
+        };
+      }
+
+      if (
+        portraitPosition &&
+        portraitPosition.state === activeState
+      ) {
+        activeState.anchor = portraitPosition.id;
+      }
+    }
+
+    // Stay paused while the existing portrait warning is visible.
+    if (landscape) return;
+
+    rotationTimer = setTimeout(() => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (version !== rotationVersion) return;
+          if (phoneIsLandscape()) return;
+
+          const saved = portraitPosition;
+
+          if (
+            view === "feed" &&
+            saved &&
+            saved.state === activeState &&
+            saved.id != null
+          ) {
+            activeState.anchor = saved.id;
+
+            const card = feed.querySelector(
+              `.movie[data-id="${saved.id}"]`
+            );
+
+            if (card) {
+              const previousBehavior = feed.style.scrollBehavior;
+              const previousSnap = feed.style.scrollSnapType;
+
+              feed.style.scrollBehavior = "auto";
+              feed.style.scrollSnapType = "none";
+              feed.scrollTop = card.offsetTop;
+
+              requestAnimationFrame(() => {
+                feed.style.scrollSnapType = previousSnap;
+                feed.style.scrollBehavior = previousBehavior;
+              });
+            }
+          }
+
+          // Allow rotation-related scroll events to finish first.
+          rotationTimer = setTimeout(() => {
+            if (version !== rotationVersion) return;
+            if (phoneIsLandscape()) return;
+
+            phoneTurning = false;
+            rememberPosition();
+            scheduleSeen();
+          }, 200);
+        });
+      });
+    }, 300);
+  }
+
+  window.addEventListener(
+    "orientationchange",
+    handlePhoneRotation
+  );
+
+  window.addEventListener("resize", handlePhoneRotation);
+
+  screen.orientation?.addEventListener(
+    "change",
+    handlePhoneRotation
+  );
+
+  /*
+   * House navigation icon.
+   */
+  const homeButton = document.querySelector(
+    '.nav-button[data-view="feed"]'
+  );
+
+  if (homeButton) {
+    const iconContainer = homeButton.querySelector("[data-icon]");
+
+    if (iconContainer) {
+      iconContainer.innerHTML = `
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.7"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="m3 10 9-7 9 7"/>
+          <path d="M5 9v11h5v-6h4v6h5V9"/>
+        </svg>
+      `;
+    }
+
+    const label = homeButton.querySelector(".nav-text");
+    if (label) label.textContent = "Home";
+
+    homeButton.setAttribute("aria-label", "Home");
+    homeButton.title = "Home — tap again for a fresh mix";
+  }
+
+  /*
+   * From another screen: Home returns to the existing feed.
+   * Already on Home: Home starts a fresh mix.
+   * Watchlist and viewing history are preserved.
+   */
+  document.addEventListener("click", event => {
+    const button = event.target.closest(
+      '.nav-button[data-view="feed"]'
+    );
+
+    if (!button || view !== "feed" || !ready) return;
+
+    event.preventDefault();
+    event.stopImmediatePropagation();
+
+    clearTimeout(seenTimer);
+    portraitPosition = null;
+
+    document.getElementById("restart-button").click();
+  }, true);
+
   if (movies.length) render();
 })();
